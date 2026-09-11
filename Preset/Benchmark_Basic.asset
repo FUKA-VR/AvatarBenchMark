@@ -1,0 +1,37 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: e79b371166de0ab41be1a3690ca33431, type: 3}
+  m_Name: Benchmark_Basic
+  m_EditorClassIdentifier: 
+  baseline:
+    id: 6cf20b5ab13346f2b69bfac137be29bc
+    label: "\u5143\u30A2\u30D0\u30BF\u30FC"
+    source:
+      globalId: 
+      displayPath: 
+    parameters: []
+  targets:
+  - id: 5da72c361b1945ab91b031fa7e79853d
+    label: "\u8A08\u6E2C\u5BFE\u8C61"
+    source:
+      globalId: 
+      displayPath: 
+    parameters: []
+  environments:
+  - {fileID: 102900000, guid: 3788af7b5941ef948bd93ecbd231ee5e, type: 3}
+  cameraSelections:
+  - environment: {fileID: 102900000, guid: 3788af7b5941ef948bd93ecbd231ee5e, type: 3}
+    cameraIds:
+    - GlobalObjectId_V1-2-3788af7b5941ef948bd93ecbd231ee5e-702759182-0
+  populations: 01000000
+  buildManifestPath: 
+  lastReportDirectory: 

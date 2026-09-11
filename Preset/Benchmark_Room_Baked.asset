@@ -1,0 +1,34 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: e79b371166de0ab41be1a3690ca33431, type: 3}
+  m_Name: Benchmark_Room_Baked
+  m_EditorClassIdentifier: 
+  baseline:
+    id: 96a69300e31b4a158158ec579cb881ad
+    label: "\u5143\u30A2\u30D0\u30BF\u30FC"
+    source:
+      globalId: 
+      displayPath: 
+    parameters: []
+  targets:
+  - id: abce2120ec37416b811f915f593fd7c8
+    label: "\u8A08\u6E2C\u5BFE\u8C61"
+    source:
+      globalId: 
+      displayPath: 
+    parameters: []
+  environments:
+  - {fileID: 102900000, guid: eed375a2d465a3b4fb704fde56c62e39, type: 3}
+  cameraSelections: []
+  populations: 01000000
+  buildManifestPath: 
+  lastReportDirectory: 

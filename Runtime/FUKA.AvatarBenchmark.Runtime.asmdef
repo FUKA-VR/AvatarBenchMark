@@ -1,0 +1,6 @@
+{
+  "name": "FUKA.AvatarBenchmark.Runtime",
+  "rootNamespace": "FUKA.AvatarBenchmark",
+  "references": ["VRC.SDKBase"],
+  "autoReferenced": true
+}

@@ -1,0 +1,11 @@
+{
+  "name": "FUKA.AvatarBenchmark.Editor",
+  "rootNamespace": "FUKA.AvatarBenchmark.Editor",
+  "references": [
+    "FUKA.AvatarBenchmark.Runtime", "nadena.dev.ndmf", "nadena.dev.ndmf.vrchat",
+    "VRC.SDKBase", "VRC.SDK3A", "VRC.SDKBase.Editor", "VRC.SDKBase.Editor.BuildPipeline",
+    "lyuma.av3emulator"
+  ],
+  "includePlatforms": ["Editor"],
+  "autoReferenced": false
+}
