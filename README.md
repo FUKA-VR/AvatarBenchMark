@@ -6,29 +6,41 @@ NDMFなどのビルド処理を反映したアバターをAv3Emulatorで再生�
 
 ## 動作環境
 
-- Unity 2022.3 / Built-in Render Pipeline
-- VRChat SDK Avatars
-- [NDMF](https://github.com/bdunderscore/ndmf)
-- [Av3Emulator](https://github.com/lyuma/Av3Emulator)
+- Unity 2022.3 / Built-in Render Pipeline（動作確認：2022.3.22f1）
+- VRChat SDK Avatars（動作確認：3.10.3）
+- [NDMF](https://github.com/bdunderscore/ndmf)（動作確認：1.13.1）
+- [Av3Emulator](https://github.com/lyuma/Av3Emulator)（動作確認：3.4.13）
 - アバターが使用するシェーダーやビルド拡張。[Modular Avatar](https://modular-avatar.nadena.dev/ja/docs/intro)を使うアバターにはModular Avatarも必要です。
 
 GPU計測にはWindows 64bit Editor / Direct3D 11が必要です。GPU計測に対応しない環境では、CPUのみを計測します。
 
-## VCCからの導入
+## 導入手順
 
-VCC向けパッケージは公開準備中です。公開後は、次の手順で導入できます。
+本ツールは、[GitHub Releases](https://github.com/FUKA-VR/AvatarBenchMark/releases)の`.unitypackage`をUnityへインポートして導入します。
 
-1. VCCでVRChatのアバター用プロジェクトを用意し、上記の依存パッケージを導入します。NDMFはModular Avatarの導入時にも追加されます。
-2. VCCの`Settings > Packages > Add Repository`に、次のURLを入力して`Add`を押します。
+### 1. 必要なツールを準備する
 
-   ```text
-   https://fuka-vr.github.io/vpm-repos/index.json
-   ```
+VCCでVRChat SDK Avatarsの入ったプロジェクトを用意し、次のツールを導入してください。すでに導入済みのものは、そのまま使えます。
 
-3. リポジトリ名が`FUKA VPM Repository`であることを確認し、`I Understand, Add Repository`を押します。
-4. 対象プロジェクトの`Manage Project`を開き、本ツールを追加してからUnityを開きます。
+- **NDMF**：Modular AvatarをVCCから導入している場合は、依存パッケージとして一緒に導入されます。NDMFだけを追加する場合は、[Modular Avatar公式の導入案内](https://modular-avatar.nadena.dev/ja/docs/intro)から`bd_`リポジトリをVCCに登録し、対象プロジェクトの`Manage Project`で`Non-Destructive Modular Framework`を追加します。
+- **Av3Emulator**：[公式リリース](https://github.com/lyuma/Av3Emulator/releases)から`.unitypackage`をダウンロードし、Unityの`Assets > Import Package > Custom Package...`でインポートします。
 
-配布元は[FUKA VPM Repository](https://fuka-vr.github.io/vpm-repos/)です。パッケージ一覧に表示されない場合は、`Selected Repos`でこのリポジトリが有効になっているか確認してください。リポジトリ登録の詳細は[VCC公式ガイド](https://vcc.docs.vrchat.com/guides/community-repositories/)を参照してください。
+計測するアバターが使うシェーダーや、Modular Avatarなどのビルド拡張も導入しておいてください。
+
+### 2. 本体をインポートする
+
+1. [GitHub Releases](https://github.com/FUKA-VR/AvatarBenchMark/releases)を開き、リリースの`Assets`欄にある`.unitypackage`をダウンロードします。
+2. 導入先のUnityプロジェクトを開き、`Assets > Import Package > Custom Package...`からダウンロードしたファイルを選びます。
+3. `Import Unity Package`画面で同梱ファイルをすべて選択したまま、`Import`を押します。
+4. インポートとコンパイルが完了したら、`Tools > FUKA > ギミックの負荷検証`を開きます。
+
+本体と同梱プリセットは、`Assets/FUKA/Addon/F_ギミックの負荷検証ツール/`に配置されます。インポート操作の詳細は[Unity公式ガイド](https://docs.unity3d.com/2022.3/Documentation/Manual/AssetPackagesImport.html)を参照してください。
+
+### 更新するには
+
+新しいリリースの`.unitypackage`を、同じプロジェクトへインポートします。リリースに個別の更新手順が記載されている場合は、その案内に従ってください。
+
+自分の計測プロファイルや編集用の環境シーンは、`Assets/MyBenchmark/`など、本ツールのフォルダ外へ保存してください。同梱プリセットを使う場合も、複製してから設定すると、更新時に設定が上書きされるのを防げます。
 
 ## 計測の流れ
 
