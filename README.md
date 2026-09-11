@@ -17,6 +17,8 @@ GPU計測にはWindows 64bit Editor / Direct3D 11が必要です。GPU計測に�
 ## 導入手順
 
 本ツールは、[GitHub Releases](https://github.com/FUKA-VR/AvatarBenchMark/releases)の`.unitypackage`をUnityへインポートして導入します。
+あるいは、BOOTHページからダウンロードしてください。
+https://fuka-vr.booth.pm/items/8831104
 
 ### 1. 必要なツールを準備する
 
@@ -29,12 +31,11 @@ VCCでVRChat SDK Avatarsの入ったプロジェクトを用意し、次のツ�
 
 ### 2. 本体をインポートする
 
-1. [GitHub Releases](https://github.com/FUKA-VR/AvatarBenchMark/releases)を開き、リリースの`Assets`欄にある`.unitypackage`をダウンロードします。
-2. 導入先のUnityプロジェクトを開き、`Assets > Import Package > Custom Package...`からダウンロードしたファイルを選びます。
-3. `Import Unity Package`画面で同梱ファイルをすべて選択したまま、`Import`を押します。
-4. インポートとコンパイルが完了したら、`Tools > FUKA > ギミックの負荷検証`を開きます。
+1. releasesか、BOOTHからunitypackageをダウンロード。
+2. 導入先のUnityプロジェクトに、ダウンロードしたunitypackageを導入。
+3. `Tools > FUKA > ギミックの負荷検証`を開きます。
 
-本体と同梱プリセットは、`Assets/FUKA/Addon/F_ギミックの負荷検証ツール/`に配置されます。インポート操作の詳細は[Unity公式ガイド](https://docs.unity3d.com/2022.3/Documentation/Manual/AssetPackagesImport.html)を参照してください。
+本体と同梱プリセットは、`Assets/FUKA/Addon/F_ギミックの負荷検証ツール/`に配置されます。
 
 ### 更新するには
 
