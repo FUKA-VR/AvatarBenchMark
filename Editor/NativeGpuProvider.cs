@@ -8,15 +8,16 @@ namespace FUKA.AvatarBenchmark.Editor
     [StructLayout(LayoutKind.Sequential)]
     internal struct NativeGpuSample
     {
-        public long sequence, forwardNs, shadowNs, cameraNs;
-        public int ticket, forwardBlocks, shadowBlocks, cameraBlocks, valid, dropped, flags;
+        public long sequence, gpuNs, shadowNs, cameraNs, textureNs;
+        public int ticket, gpuBlocks, shadowBlocks, cameraBlocks, valid, dropped, flags;
+        public int textureBlocks;
     }
 
     internal static class NativeGpuProvider
     {
         private const string Library = "FukaAvatarBenchmarkGpu05";
-        public const string TimingMethod = "d3d11-draw-boundary-flush";
-        private const int CaptureApi = 1;
+        public const string TimingMethod = "d3d11-multi-camera-interval-union";
+        private const int CaptureApi = 2;
         private static bool apiChecked;
         [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] private static extern int Fuka_CaptureApi();
         [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] private static extern IntPtr Fuka_GetRenderEvent();

@@ -48,7 +48,7 @@ namespace FUKA.AvatarBenchmark.Editor
             gpuUsable = string.IsNullOrEmpty(error) && string.IsNullOrEmpty(gpuError) && string.IsNullOrEmpty(gpuComparisonIssue) &&
                 BenchmarkStatistics.EnoughSamples(samples - gpuMissing, samples);
             cpuUsable = string.IsNullOrEmpty(error) && BenchmarkStatistics.EnoughSamples(samples - cpuMissing, samples);
-            Describe(frames.Where(x => x.gpuValid).Select(x => (x.forwardNs + x.shadowNs) / 1e6).ToArray(),
+            Describe(frames.Where(x => x.gpuValid).Select(x => x.gpuNs / 1e6).ToArray(),
                 out gpuMedianMs, out gpuMeanMs, out gpuStandardDeviationMs, out gpuP95Ms, out gpuMaxMs);
             Describe(frames.Where(x => x.cpuValid).Select(x => x.cpuNs / 1e6).ToArray(),
                 out cpuMedianMs, out cpuMeanMs, out cpuStandardDeviationMs, out cpuP95Ms, out cpuMaxMs);
@@ -94,17 +94,20 @@ namespace FUKA.AvatarBenchmark.Editor
     [Serializable]
     public sealed class BenchmarkReport
     {
-        public const string MeasurementMethod = "normal-render-intervals";
+        public const string CurrentToolVersion = "1.10";
+        public const string MeasurementMethod = "multi-camera-render-intervals";
         public const int MaximumLoggedErrors = 100;
         public const string LoggedErrorWarning = "計測またはプレビュー中にエラーが発生しました。処理の停止や描画の欠落、エラーログ出力の負荷によって計測数値に影響が出ている可能性があります。";
         public string measurementMethod;
+        public string toolVersion;
+        public string ToolVersionText => string.IsNullOrWhiteSpace(toolVersion) ? "未記録" : toolVersion;
         public string gpuTimingMethod;
         public string startedUtc, finishedUtc;
         public string DurationText => BenchmarkTiming.FormatDuration(BenchmarkTiming.ElapsedSeconds(startedUtc, finishedUtc));
         public string status, error, unityVersion, operatingSystem, cpu, gpu, graphicsApi, colorSpace, quality, packageVersions;
         public List<BenchmarkUnitySetting> unitySettings;
         public string profileJson, planJson, buildId;
-        public string measurementScope = "Unity Play Mode / Built-in Forward / D3D11 hardware timestamps with disjoint checks. CPU main-thread PlayerLoop, GPU Forward + shadow-map elapsed intervals and Unity frame cadence are recorded for the same Unity frames. Delayed GPU replies are associated with their original frame. Commands are flushed before each draw interval's start timestamp and immediately after its end timestamp; completion is polled asynchronously. Intervals can still contain command-submission waits within the draw interval and are not pure GPU active time. Submission overhead, external applications, Editor activity and animation phase may affect results; these timings cannot be converted directly to VRChat client FPS.";
+        public string measurementScope = "Unity Play Mode / Built-in / D3D11 timestamp union of game and reflection camera rendering, shadow-map rendering and the CustomRenderTexture update stage per simulation frame. Includes camera RenderTexture output and depth passes. Forward/Deferred camera intervals end at AfterEverything; VertexLit uses pre/post-render callbacks. Overlapping intervals count once; gaps between intervals are excluded. SceneView, preview cameras and repeated automatic GameView repaints are excluded. Standalone GPU work outside these intervals is not captured. CPU is main-thread PlayerLoop, not total worker, render-thread or audio DSP CPU time. GPU elapsed intervals can contain command-submission waits and are not pure GPU active time. Delayed replies retain their source frame. These timings cannot be converted directly to VRChat client FPS.";
         public List<BenchmarkCaseResult> cases = new List<BenchmarkCaseResult>();
         public List<BenchmarkLoggedError> loggedErrors = new List<BenchmarkLoggedError>();
         public long omittedLogErrors;
@@ -157,13 +160,13 @@ namespace FUKA.AvatarBenchmark.Editor
         {
             Directory.CreateDirectory(directory);
             WriteAtomic(Path.Combine(directory, "report.json"), JsonUtility.ToJson(this, true));
-            var csv = new StringBuilder("case,environment,view,population,round,role,target,observed_frame,realtime,frame_time_ns,frame_time_valid,cpu_ns,cpu_valid,gpu_ticket,gpu_returned,gpu_sequence,gpu_dropped,gpu_flags,forward_ns,shadow_ns,camera_ns,forward_blocks,shadow_blocks,camera_blocks,gpu_valid,draw_calls,setpass_calls,triangles\n");
+            var csv = new StringBuilder("case,environment,view,population,round,role,target,observed_frame,realtime,frame_time_ns,frame_time_valid,cpu_ns,cpu_valid,gpu_ticket,gpu_returned,gpu_sequence,gpu_dropped,gpu_flags,gpu_ns,shadow_ns,camera_ns,texture_ns,gpu_blocks,shadow_blocks,camera_blocks,texture_blocks,gpu_valid,draw_calls,setpass_calls,triangles\n");
             foreach (var c in cases)
             foreach (var f in c.frames)
                 csv.AppendLine(string.Join(",", new[] { Cell(c.id), Cell(c.environment), Cell(c.view), c.population.ToString(), c.round.ToString(), Cell(c.role), Cell(c.label),
                     f.observedFrame.ToString(), N(f.realtime), f.frameTimeNs.ToString(), f.frameTimeValid.ToString(), f.cpuNs.ToString(), f.cpuValid.ToString(),
                     f.gpuTicket.ToString(), f.gpuReturned.ToString(), f.gpuSequence.ToString(), f.gpuDropped.ToString(), f.gpuFlags.ToString(),
-                    f.forwardNs.ToString(), f.shadowNs.ToString(), f.cameraNs.ToString(), f.forwardBlocks.ToString(), f.shadowBlocks.ToString(), f.cameraBlocks.ToString(), f.gpuValid.ToString(),
+                    f.gpuNs.ToString(), f.shadowNs.ToString(), f.cameraNs.ToString(), f.textureNs.ToString(), f.gpuBlocks.ToString(), f.shadowBlocks.ToString(), f.cameraBlocks.ToString(), f.textureBlocks.ToString(), f.gpuValid.ToString(),
                     f.drawCalls.ToString(), f.setPassCalls.ToString(), f.triangles.ToString() }));
             WriteAtomic(Path.Combine(directory, "frames.csv"), csv.ToString());
             SaveViews(directory, profile);
@@ -178,6 +181,7 @@ namespace FUKA.AvatarBenchmark.Editor
         public string Summary(BenchmarkProfile profile)
         {
             var text = new StringBuilder("# VRChat ギミック負荷検証レポート\n\n");
+            text.AppendLine("ツールバージョン: " + ToolVersionText + "\n");
             text.AppendLine("ステータス: " + status + "  \nUnity " + unityVersion + " / " + gpu + " / " + graphicsApi + "\n");
             text.AppendLine("計測所要時間: " + DurationText + "\n");
             if (HasLoggedErrors)
@@ -192,7 +196,7 @@ namespace FUKA.AvatarBenchmark.Editor
                 "・代表値: 複数回の計測試行で得られた中央値の中央値を採用しています。\n" +
                 "・標準偏差: 計測中の負荷のばらつき度合いを示します（値が小さいほど負荷が安定）。\n" +
                 "・P95: 全体の95%のフレームが収まる負荷水準です（一時的なスパイク負荷の指標）。\n" +
-                "・GPU時間: メインカメラのForward描画およびシャドウマップ生成にかかったGPU処理時間です（描画命令待ち含む）。\n" +
+                "・GPU時間: 計測カメラ・追加カメラ・影生成・CustomRenderTexture更新の区間を、重なりを二重加算せず集計した時間です（描画命令待ち含む）。\n" +
                 "・CPU時間: Av3Emulatorを含むメインスレッドのPlayerLoop処理時間です。\n" +
                 "・フレーム時間: Unity全体の1フレーム更新間隔です。\n" +
                 "※CPU時間とGPU時間は並行して処理されるため単純加算はできません。また、VRChatクライアント内での実FPSとは直接一致しません。\n");

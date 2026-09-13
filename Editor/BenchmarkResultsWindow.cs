@@ -59,6 +59,7 @@ namespace FUKA.AvatarBenchmark.Editor
             if (error != null) { EditorGUILayout.HelpBox(error, MessageType.Error); return; }
             if (report == null) return;
             scroll = EditorGUILayout.BeginScrollView(scroll);
+            EditorGUILayout.LabelField("ツールバージョン", report.ToolVersionText, EditorStyles.boldLabel);
             EditorGUILayout.LabelField(report.status + " / " + report.unityVersion + " / " + report.gpu + " / " + report.graphicsApi);
             EditorGUILayout.LabelField("所要時間", report.DurationText, EditorStyles.boldLabel);
             if (report.HasLoggedErrors)

@@ -3,6 +3,7 @@ using System;
 using System.Collections.Generic;
 using Unity.Profiling;
 using Unity.Profiling.LowLevel.Unsafe;
+using UnityEditor.SceneManagement;
 using UnityEngine;
 using UnityEngine.Profiling;
 using UnityEngine.Rendering;
@@ -14,13 +15,13 @@ namespace FUKA.AvatarBenchmark.Editor
     {
         public long gpuSequence;
         public int gpuTicket, gpuDropped, gpuFlags;
-        public bool gpuReturned;
+        public bool gpuReturned, cpuReturned;
         public int observedFrame;
         public double realtime;
         public long frameTimeNs;
         public bool frameTimeValid;
-        public long forwardNs, shadowNs, cameraNs;
-        public int forwardBlocks, shadowBlocks, cameraBlocks;
+        public long gpuNs, shadowNs, cameraNs, textureNs;
+        public int gpuBlocks, shadowBlocks, cameraBlocks, textureBlocks;
         public long cpuNs, drawCalls, setPassCalls, triangles;
         public bool gpuValid, cpuValid;
     }
@@ -28,14 +29,26 @@ namespace FUKA.AvatarBenchmark.Editor
     public sealed class BenchmarkMetrics : IDisposable
     {
         private readonly Camera camera;
-        private readonly List<KeyValuePair<CameraEvent, CommandBuffer>> cameraBuffers = new List<KeyValuePair<CameraEvent, CommandBuffer>>();
+        private static readonly CameraEvent[] CameraStarts = {
+            CameraEvent.BeforeDepthTexture, CameraEvent.BeforeDepthNormalsTexture,
+            CameraEvent.BeforeGBuffer, CameraEvent.BeforeForwardOpaque,
+            CameraEvent.BeforeLighting, CameraEvent.BeforeFinalPass
+        };
+        private readonly Dictionary<Camera, List<KeyValuePair<CameraEvent, CommandBuffer>>> cameraBuffers = new Dictionary<Camera, List<KeyValuePair<CameraEvent, CommandBuffer>>>();
         private readonly Dictionary<Light, CommandBuffer[]> lightBuffers = new Dictionary<Light, CommandBuffer[]>();
+        private readonly Dictionary<Camera, int> cameraIds = new Dictionary<Camera, int>();
+        private readonly HashSet<Camera> callbackCameras = new HashSet<Camera>();
+        private readonly HashSet<Camera> automaticCameras = new HashSet<Camera>();
+        private readonly Stack<bool> cameraScopes = new Stack<bool>();
         private ProfilerRecorder cpu, draws, setPasses, triangles;
         private readonly bool wasProfilerEnabled;
+        private readonly BenchmarkFrameHooks frameHooks;
         private CommandBuffer beginFrame;
         private IntPtr nativeEvent;
         private BenchmarkCaptureLedger ledger;
         private bool nativeActive, collecting, draining, disposed;
+        private bool frameOpen, mainCameraRendered, inPlayerLoop;
+        private int lastStartedFrame = -1, cameraId, lightId;
         private static int nextTicket;
 
         public bool GpuAvailable => nativeActive;
@@ -43,6 +56,7 @@ namespace FUKA.AvatarBenchmark.Editor
         public int GpuValidFrames => ledger?.GpuValidFrames ?? 0;
         public int TotalFrames => ledger?.TotalFrames ?? 0;
         public int PendingGpuFrames => ledger?.PendingGpuFrames ?? 0;
+        public int PendingCpuFrames => ledger?.PendingCpuFrames ?? 0;
         public double MaximumFrameSeconds => ledger?.MaximumFrameSeconds ?? 0;
         public int DrainPolls { get; private set; }
 
@@ -55,6 +69,7 @@ namespace FUKA.AvatarBenchmark.Editor
             draws = OpenRecorder("Draw Calls Count", false);
             setPasses = OpenRecorder("SetPass Calls Count", false);
             triangles = OpenRecorder("Triangles Count", false);
+            frameHooks = new BenchmarkFrameHooks(StartFrame, () => inPlayerLoop = false, () => TextureEvent(14), () => TextureEvent(15));
         }
 
         public void EnableGpu()
@@ -63,28 +78,70 @@ namespace FUKA.AvatarBenchmark.Editor
             nativeEvent = NativeGpuProvider.EventPointer();
             try
             {
-                beginFrame = new CommandBuffer { name = "FUKA GPU capture begin" };
-                Add(CameraEvent.BeforeForwardOpaque, 4);
-                Add(CameraEvent.AfterForwardAlpha, 5);
-                Add(CameraEvent.AfterEverything, 9, 10);
+                beginFrame = new CommandBuffer { name = "FUKA GPU frame capture" };
                 NativeGpuProvider.Clear();
                 nativeActive = true;
                 Camera.onPreCull += BeforeCamera;
+                Camera.onPreRender += BeforeLegacyCamera;
+                Camera.onPostRender += AfterLegacyCamera;
+                foreach (var rendered in UnityEngine.Object.FindObjectsOfType<Camera>(true)) RegisterCamera(rendered);
                 DiscoverLights();
             }
             catch { RemoveGpuBuffers(); throw; }
         }
 
-        public void BeginSampling(List<BenchmarkSample> frames, int frame, double now)
+        public void BeginSampling(List<BenchmarkSample> frames)
         {
             ledger = new BenchmarkCaptureLedger(frames);
             collecting = true; draining = false;
-            ledger.BeginFrame(frame, now);
+            // Capture starts on the next complete frame, including FixedUpdate and manual renders.
         }
 
-        public void BeginFrame(int frame, double now)
+        private void StartFrame()
         {
-            if (collecting) ledger.BeginFrame(frame, now);
+            if (disposed || lastStartedFrame == Time.frameCount) return;
+            // Editor GameView rendering happens after PlayerLoop, so close at the next update.
+            EndFrame();
+            lastStartedFrame = Time.frameCount;
+            inPlayerLoop = true;
+            automaticCameras.Clear(); cameraScopes.Clear();
+            double now = Time.realtimeSinceStartupAsDouble;
+            ReadCompletedFrame(Time.frameCount, now);
+            DrainResults();
+            if (collecting) ledger.BeginFrame(Time.frameCount, now);
+            if (!nativeActive) return;
+            beginFrame.Clear();
+            if (draining)
+            {
+                DrainPolls++;
+                beginFrame.IssuePluginEvent(nativeEvent, 11);
+            }
+            else
+            {
+                if (nextTicket >= 0x00ffffff) throw new InvalidOperationException("GPU計測の記録数が上限に達しました。Playモードを終了して再計測してください。");
+                int ticket = ++nextTicket;
+                if (collecting) ledger.BindGpu(Time.frameCount, ticket);
+                beginFrame.IssuePluginEvent(nativeEvent, (ticket << 8) | 1);
+                frameOpen = true; mainCameraRendered = false;
+            }
+            Graphics.ExecuteCommandBuffer(beginFrame);
+        }
+
+        private void EndFrame()
+        {
+            if (!nativeActive || !frameOpen) return;
+            beginFrame.Clear();
+            if (!mainCameraRendered) beginFrame.IssuePluginEvent(nativeEvent, 12);
+            beginFrame.IssuePluginEvent(nativeEvent, 10);
+            Graphics.ExecuteCommandBuffer(beginFrame);
+            frameOpen = false;
+        }
+
+        private void TextureEvent(int id)
+        {
+            if (!nativeActive || !frameOpen) return;
+            beginFrame.Clear(); beginFrame.IssuePluginEvent(nativeEvent, id);
+            Graphics.ExecuteCommandBuffer(beginFrame);
         }
 
         public void ReadCompletedFrame(int currentFrame, double now)
@@ -108,28 +165,57 @@ namespace FUKA.AvatarBenchmark.Editor
 
         private void BeforeCamera(Camera rendered)
         {
-            if (rendered != camera || !nativeActive) return;
-            beginFrame.Clear();
-            if (draining)
+            if (!nativeActive || !frameOpen) return;
+            RegisterCamera(rendered);
+            bool accepted = IsMeasuredCamera(rendered);
+            if (cameraScopes.Count > 0) accepted &= cameraScopes.Peek();
+            // Repaint can redraw the GameView repeatedly without another simulation update.
+            // Explicit renders inside PlayerLoop or an accepted camera keep their full count.
+            else if (!inPlayerLoop && accepted) accepted = automaticCameras.Add(rendered);
+            cameraScopes.Push(accepted);
+            beginFrame.Clear(); beginFrame.IssuePluginEvent(nativeEvent, ((accepted ? 1 : 0) << 8) | 16);
+            Graphics.ExecuteCommandBuffer(beginFrame);
+            if (rendered == camera && accepted) mainCameraRendered = true;
+        }
+
+        public static bool IsMeasuredCamera(Camera rendered)
+            => rendered && (rendered.cameraType == CameraType.Game || rendered.cameraType == CameraType.Reflection) &&
+               !EditorSceneManager.IsPreviewScene(rendered.gameObject.scene);
+
+        private void RegisterCamera(Camera rendered)
+        {
+            if (!IsMeasuredCamera(rendered)) return;
+            bool callback = rendered.actualRenderingPath == RenderingPath.VertexLit;
+            if (cameraBuffers.TryGetValue(rendered, out var previous))
             {
-                DrainPolls++;
-                beginFrame.IssuePluginEvent(nativeEvent, 11);
+                if (callbackCameras.Contains(rendered) == callback) return;
+                foreach (var pair in previous) { rendered.RemoveCommandBuffer(pair.Key, pair.Value); pair.Value.Release(); }
+                cameraBuffers.Remove(rendered); callbackCameras.Remove(rendered);
             }
-            else
-            {
-                if (nextTicket >= 0x00ffffff) throw new InvalidOperationException("GPU計測の記録数が上限に達しました。Playモードを終了して再計測してください。");
-                int ticket = ++nextTicket;
-                if (collecting && !ledger.BindGpu(Time.frameCount, ticket))
-                {
-                    beginFrame.IssuePluginEvent(nativeEvent, 11);
-                    Graphics.ExecuteCommandBuffer(beginFrame);
-                    return;
-                }
-                // Warmup renders have unique tickets too, but no entry in the sampling ledger.
-                // Queued warmup replies can therefore never leak across the interval boundary.
-                beginFrame.IssuePluginEvent(nativeEvent, (ticket << 8) | 1);
-                beginFrame.IssuePluginEvent(nativeEvent, 8);
-            }
+            if (!cameraIds.TryGetValue(rendered, out int id)) cameraIds.Add(rendered, id = ++cameraId);
+            var buffers = new List<KeyValuePair<CameraEvent, CommandBuffer>>();
+            cameraBuffers.Add(rendered, buffers);
+            // VertexLit does not expose the Forward/Deferred command-buffer stages.
+            if (callback) { callbackCameras.Add(rendered); return; }
+            // Start at the first GPU stage that executes, after CPU culling/preparation.
+            foreach (var start in CameraStarts) Add(rendered, buffers, start, (id << 8) | 4, true);
+            Add(rendered, buffers, CameraEvent.AfterEverything, (id << 8) | 5, false);
+        }
+
+        private void BeforeLegacyCamera(Camera rendered) { LegacyCameraEvent(rendered, 4); }
+        private void AfterLegacyCamera(Camera rendered)
+        {
+            if (!nativeActive || !frameOpen) return;
+            LegacyCameraEvent(rendered, 5);
+            if (cameraScopes.Count == 0) return;
+            cameraScopes.Pop();
+            beginFrame.Clear(); beginFrame.IssuePluginEvent(nativeEvent, 17);
+            Graphics.ExecuteCommandBuffer(beginFrame);
+        }
+        private void LegacyCameraEvent(Camera rendered, int kind)
+        {
+            if (!nativeActive || !frameOpen || !callbackCameras.Contains(rendered)) return;
+            beginFrame.Clear(); beginFrame.IssuePluginEvent(nativeEvent, (cameraIds[rendered] << 8) | kind);
             Graphics.ExecuteCommandBuffer(beginFrame);
         }
 
@@ -142,11 +228,11 @@ namespace FUKA.AvatarBenchmark.Editor
                 ledger?.AcceptGpu(new BenchmarkSample
                 {
                     gpuTicket = gpu.ticket, gpuSequence = gpu.sequence, gpuDropped = gpu.dropped,
-                    gpuFlags = gpu.flags, forwardNs = gpu.forwardNs, shadowNs = gpu.shadowNs,
-                    cameraNs = gpu.cameraNs, forwardBlocks = gpu.forwardBlocks,
+                    gpuFlags = gpu.flags, gpuNs = gpu.gpuNs, shadowNs = gpu.shadowNs,
+                    cameraNs = gpu.cameraNs, textureNs = gpu.textureNs, gpuBlocks = gpu.gpuBlocks, textureBlocks = gpu.textureBlocks,
                     shadowBlocks = gpu.shadowBlocks, cameraBlocks = gpu.cameraBlocks,
-                    gpuValid = gpu.valid != 0 && gpu.flags == 0 && gpu.forwardNs >= 0 && gpu.shadowNs >= 0 &&
-                               gpu.cameraNs >= 0 && gpu.forwardBlocks == 1 && gpu.cameraBlocks == 1,
+                    gpuValid = gpu.valid != 0 && gpu.flags == 0 && gpu.gpuNs >= 0 && gpu.shadowNs >= 0 &&
+                               gpu.cameraNs >= 0 && gpu.textureNs >= 0 && gpu.cameraBlocks >= 1,
                     gpuReturned = true
                 });
             }
@@ -166,12 +252,15 @@ namespace FUKA.AvatarBenchmark.Editor
             return default;
         }
 
-        private void Add(CameraEvent position, params int[] events)
+        private void Add(Camera rendered, List<KeyValuePair<CameraEvent, CommandBuffer>> buffers, CameraEvent position, int id, bool first)
         {
-            var buffer = new CommandBuffer();
-            foreach (int value in events) buffer.IssuePluginEvent(nativeEvent, value);
-            camera.AddCommandBuffer(position, buffer);
-            cameraBuffers.Add(new KeyValuePair<CameraEvent, CommandBuffer>(position, buffer));
+            var buffer = new CommandBuffer { name = "FUKA GPU camera interval" };
+            buffer.IssuePluginEvent(nativeEvent, id);
+            var existing = first ? rendered.GetCommandBuffers(position) : Array.Empty<CommandBuffer>();
+            foreach (var item in existing) rendered.RemoveCommandBuffer(position, item);
+            rendered.AddCommandBuffer(position, buffer);
+            foreach (var item in existing) rendered.AddCommandBuffer(position, item);
+            buffers.Add(new KeyValuePair<CameraEvent, CommandBuffer>(position, buffer));
         }
 
         public void DiscoverLights()
@@ -179,9 +268,10 @@ namespace FUKA.AvatarBenchmark.Editor
             if (!nativeActive) return;
             foreach (var light in UnityEngine.Object.FindObjectsOfType<Light>(true))
             {
-                if (lightBuffers.ContainsKey(light)) continue;
+                if (lightBuffers.ContainsKey(light) || EditorSceneManager.IsPreviewScene(light.gameObject.scene)) continue;
+                int id = ++lightId;
                 var begin = new CommandBuffer(); var end = new CommandBuffer();
-                begin.IssuePluginEvent(nativeEvent, 6); end.IssuePluginEvent(nativeEvent, 7);
+                begin.IssuePluginEvent(nativeEvent, (id << 8) | 6); end.IssuePluginEvent(nativeEvent, (id << 8) | 7);
                 light.AddCommandBuffer(LightEvent.BeforeShadowMap, begin);
                 light.AddCommandBuffer(LightEvent.AfterShadowMap, end);
                 lightBuffers.Add(light, new[] { begin, end });
@@ -191,12 +281,17 @@ namespace FUKA.AvatarBenchmark.Editor
         private void RemoveGpuBuffers()
         {
             Camera.onPreCull -= BeforeCamera;
-            foreach (var pair in cameraBuffers)
+            Camera.onPreRender -= BeforeLegacyCamera;
+            Camera.onPostRender -= AfterLegacyCamera;
+            foreach (var cameraPair in cameraBuffers)
+            foreach (var pair in cameraPair.Value)
             {
-                if (camera) camera.RemoveCommandBuffer(pair.Key, pair.Value);
+                if (cameraPair.Key) cameraPair.Key.RemoveCommandBuffer(pair.Key, pair.Value);
                 pair.Value.Release();
             }
             cameraBuffers.Clear();
+            cameraIds.Clear(); callbackCameras.Clear();
+            automaticCameras.Clear(); cameraScopes.Clear();
             foreach (var pair in lightBuffers)
             {
                 if (pair.Key)
@@ -208,13 +303,15 @@ namespace FUKA.AvatarBenchmark.Editor
             }
             lightBuffers.Clear();
             beginFrame?.Release(); beginFrame = null;
-            nativeActive = false;
+            nativeActive = frameOpen = false;
         }
 
         public void Dispose()
         {
             if (disposed) return;
+            EndFrame();
             disposed = true;
+            frameHooks.Dispose();
             RemoveGpuBuffers();
             cpu.Dispose(); draws.Dispose(); setPasses.Dispose(); triangles.Dispose();
             Profiler.enabled = wasProfilerEnabled;

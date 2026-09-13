@@ -42,7 +42,7 @@ namespace FUKA.AvatarBenchmark.Editor
 
         private void OnGUI()
         {
-            EditorGUILayout.LabelField("ギミックの負荷検証", EditorStyles.boldLabel);
+            EditorGUILayout.LabelField("ギミックの負荷検証 v" + BenchmarkReport.CurrentToolVersion, EditorStyles.boldLabel);
             EditorGUILayout.LabelField(BenchmarkSession.Status);
             if (BenchmarkSession.IsBusy)
             {

@@ -250,6 +250,7 @@ namespace FUKA.AvatarBenchmark.Editor
         private readonly BenchmarkReport report;
         private readonly List<Job> jobs = new List<Job>();
         private readonly List<GameObject> avatars = new List<GameObject>();
+        private readonly List<BenchmarkInstanceAssets> instanceAssets = new List<BenchmarkInstanceAssets>();
         private readonly BenchmarkFramePump pump;
         private readonly HashSet<int> unexpectedCameras = new HashSet<int>();
         private Phase phase;
@@ -286,6 +287,7 @@ namespace FUKA.AvatarBenchmark.Editor
             if (!manifest) throw new InvalidOperationException("計測用ビルドが見つかりません。");
             report = new BenchmarkReport
             {
+                toolVersion = BenchmarkReport.CurrentToolVersion,
                 measurementMethod = BenchmarkReport.MeasurementMethod,
                 gpuTimingMethod = NativeGpuProvider.TimingMethod,
                 startedUtc = DateTime.UtcNow.ToString("o"), status = "計測中", unityVersion = Application.unityVersion,
@@ -384,7 +386,7 @@ namespace FUKA.AvatarBenchmark.Editor
                     if (ShaderUtil.anythingCompiling) { phaseStart = now; return; }
                     if (now - phaseStart < .15) return;
                     samplingStartedAt = phaseStart = now;
-                    metrics.BeginSampling(result.frames, Time.frameCount, now);
+                    metrics.BeginSampling(result.frames);
                     phase = Phase.Sampling;
                     return;
                 }
@@ -402,7 +404,7 @@ namespace FUKA.AvatarBenchmark.Editor
                         metrics.StopSampling();
                         phase = Phase.Draining; phaseStart = now;
                         Status = "[" + (jobIndex + 1) + "/" + jobs.Count + "] GPU計測データを回収中: " + result.label;
-                        if (!metrics.GpuAvailable || metrics.PendingGpuFrames == 0) CompleteCase();
+                        if (metrics.PendingCpuFrames == 0 && (!metrics.GpuAvailable || metrics.PendingGpuFrames == 0)) CompleteCase();
                         return;
                     }
                     if (elapsed >= profile.measureSeconds) lastSamplingWasExtended = true;
@@ -413,13 +415,12 @@ namespace FUKA.AvatarBenchmark.Editor
                             (lastSamplingWasExtended ? "（サンプル不足のため計測延長中）" : " 計測中: ") +
                             elapsed.ToString("F0") + "秒 / 上限" + profile.maximumMeasureSeconds + "秒";
                     }
-                    metrics.BeginFrame(Time.frameCount, now);
                     return;
                 }
                 if (phase == Phase.Draining)
                 {
                     result.gpuDrainSeconds = now - phaseStart;
-                    if (metrics.PendingGpuFrames == 0 || result.gpuDrainSeconds >= GpuDrainLimitSeconds ||
+                    if (metrics.PendingCpuFrames == 0 && metrics.PendingGpuFrames == 0 || result.gpuDrainSeconds >= GpuDrainLimitSeconds ||
                         result.gpuDrainSeconds >= gpuDrainBudgetSeconds && metrics.DrainPolls >= 4)
                         CompleteCase();
                 }
@@ -478,8 +479,7 @@ namespace FUKA.AvatarBenchmark.Editor
             SceneManager.SetActiveScene(environmentScene);
             environment = environmentScene.GetRootGameObjects().SelectMany(x => x.GetComponentsInChildren<BenchmarkEnvironment>(true)).Single();
             BenchmarkSession.ValidateEnvironment(environment, environmentScene);
-            foreach (var root in environmentScene.GetRootGameObjects())
-            foreach (var c in root.GetComponentsInChildren<Camera>(true)) c.enabled = false;
+            foreach (var c in environment.viewpoints) if (c) c.enabled = false;
             LightProbes.Tetrahedralize();
             loadedEnvironment = jobs[jobIndex].environment;
         }
@@ -540,7 +540,9 @@ namespace FUKA.AvatarBenchmark.Editor
                     var pin = environment.avatarPins[i];
                     var clone = Object.Instantiate(built.prefab, pin.position, pin.rotation);
                     clone.name = "FUKA Measured Avatar " + i;
-                    avatars.Add(clone); clone.SetActive(true);
+                    avatars.Add(clone);
+                    instanceAssets.Add(new BenchmarkInstanceAssets(clone));
+                    clone.SetActive(true);
                 }
             }
             host.SetActive(true);
@@ -605,6 +607,8 @@ namespace FUKA.AvatarBenchmark.Editor
         private void AuditRuntime()
         {
             var audit = new System.Text.StringBuilder();
+            audit.AppendLine("Physics=" + Physics.simulationMode + " / FixedDeltaTime=" + Time.fixedDeltaTime +
+                " / SolverIterations=" + Physics.defaultSolverIterations + " / SolverVelocityIterations=" + Physics.defaultSolverVelocityIterations);
             foreach (var avatar in avatars)
             {
                 var runtime = avatar.GetComponent<LyumaAv3Runtime>();
@@ -615,9 +619,28 @@ namespace FUKA.AvatarBenchmark.Editor
                 foreach (var p in runtime.Ints) audit.AppendLine("Int " + p.name + "=" + p.value);
                 foreach (var p in runtime.Floats) audit.AppendLine("Float " + p.name + "=" + p.exportedValue.ToString(System.Globalization.CultureInfo.InvariantCulture));
                 foreach (var component in avatar.GetComponentsInChildren<Component>(true).Where(x => x &&
-                             (x.GetType().Name.Contains("PhysBone") || x.GetType().Name.Contains("Constraint"))))
+                             (x.GetType().Name.Contains("PhysBone") || x.GetType().Name.Contains("Constraint") ||
+                              x.GetType().Name.Contains("Contact") || x.GetType().Name.Contains("Raycast") ||
+                              x.GetType().Name.Contains("HeadChop") || x is Rigidbody || x is Joint || x is Cloth ||
+                              x is Camera || x is Collider || x is ParticleSystem || x is AudioSource || x is Light)))
+                {
                     audit.AppendLine(component.GetType().Name + " / " + component.name + " active=" + component.gameObject.activeInHierarchy +
                         (component is Behaviour behavior ? " enabled=" + behavior.enabled : ""));
+                    if (component is Rigidbody body)
+                        audit.AppendLine("  isKinematic=" + body.isKinematic + " sleeping=" + body.IsSleeping() + " useGravity=" + body.useGravity);
+                    else if (component is Joint joint)
+                        audit.AppendLine("  connectedBody=" + (joint.connectedBody ? joint.connectedBody.name : "world") + " enableCollision=" + joint.enableCollision);
+                    else if (component is Cloth cloth)
+                        audit.AppendLine("  enabled=" + cloth.enabled + " vertices=" + cloth.vertices.Length + " useGravity=" + cloth.useGravity);
+                    else if (component is Camera extraCamera)
+                        audit.AppendLine("  target=" + (extraCamera.targetTexture ? extraCamera.targetTexture.name + " (" + extraCamera.targetTexture.width + "x" + extraCamera.targetTexture.height + ")" : "screen") + " depth=" + extraCamera.depth);
+                    else if (component is Collider collider)
+                        audit.AppendLine("  enabled=" + collider.enabled + " isTrigger=" + collider.isTrigger);
+                    else if (component is ParticleSystem particles)
+                        audit.AppendLine("  isPlaying=" + particles.isPlaying + " particles=" + particles.particleCount);
+                    else if (component is AudioSource audio)
+                        audit.AppendLine("  isPlaying=" + audio.isPlaying + " mute=" + audio.mute);
+                }
                 foreach (var renderer in avatar.GetComponentsInChildren<Renderer>(true))
                     audit.AppendLine(renderer.GetType().Name + " / " + renderer.name + " enabled=" + renderer.enabled + " active=" + renderer.gameObject.activeInHierarchy);
             }
@@ -626,12 +649,12 @@ namespace FUKA.AvatarBenchmark.Editor
 
         private void OnCamera(Camera rendered)
         {
-            if (phase == Phase.Sampling && camera && rendered != camera && rendered.cameraType == CameraType.Game && unexpectedCameras.Add(rendered.GetInstanceID()))
+            if (phase == Phase.Sampling && camera && rendered != camera && BenchmarkMetrics.IsMeasuredCamera(rendered) && unexpectedCameras.Add(rendered.GetInstanceID()))
             {
                 if (result != null)
                 {
-                    result.gpuComparisonIssue = "計測中に対象以外のカメラが描画したため、GPUの比較判定を保留します。";
-                    result.runtimeAudit += "\n追加カメラ: " + rendered.name;
+                    result.runtimeAudit += "\n追加カメラ（GPU計測対象）: " + rendered.name +
+                        " / RenderTexture=" + (rendered.targetTexture ? rendered.targetTexture.name : "画面");
                 }
             }
         }
@@ -667,6 +690,8 @@ namespace FUKA.AvatarBenchmark.Editor
             emulator = null;
             foreach (var avatar in avatars) if (avatar) Object.DestroyImmediate(avatar);
             avatars.Clear();
+            foreach (var assets in instanceAssets) assets.Dispose();
+            instanceAssets.Clear();
         }
 
         public void Finish(string status, string error)

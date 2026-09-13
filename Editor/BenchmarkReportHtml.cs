@@ -27,6 +27,7 @@ p{margin:8px 0}.eyebrow{font-size:12px;letter-spacing:.14em;color:var(--muted)}.
 @media(max-width:840px){main{padding:20px 14px}.grid{grid-template-columns:1fr}.card,details{padding:16px}}@media print{body{background:white}main{padding:0}details{break-inside:avoid}.card{break-inside:avoid}}
 </style><main>");
             html.Append("<div class='eyebrow'>FUKA / AVATAR BENCHMARK</div><h1>VRChat ギミック負荷検証レポート</h1>");
+            html.Append("<p><strong>ツールバージョン: ").Append(H(report.ToolVersionText)).Append("</strong></p>");
             html.Append("<p>").Append(H(report.status)).Append(" · ").Append(H(report.gpu)).Append(" · Unity ").Append(H(report.unityVersion)).Append(" / ").Append(H(report.graphicsApi)).Append("</p>");
             html.Append("<p class='muted'>").Append(H(report.cpu)).Append(" · ").Append(H(report.startedUtc)).Append("</p>");
             html.Append("<p><strong>計測所要時間: ").Append(H(report.DurationText)).Append("</strong></p>");
@@ -36,7 +37,7 @@ p{margin:8px 0}.eyebrow{font-size:12px;letter-spacing:.14em;color:var(--muted)}.
                     .Append(H(report.LoggedErrorDetails())).Append("</pre></div>");
             html.Append("<p class='note'>同一の測定区間におけるCPU処理時間・GPU描画時間・Unityフレームレート間隔を記録しています。</p>");
             html.Append("<p class='links'><a href='summary.md'>マークダウン要約</a><a href='report.json'>詳細JSONデータ</a><a href='frames.csv'>全フレームCSV</a></p>");
-            html.Append("<div class='note'><strong>【データの見方】</strong><br>・<strong>中央値</strong>: 計測期間中の代表的な負荷値（値が小さいほど軽量）<br>・<strong>標準偏差</strong>: アニメーション等による負荷のばらつき（値が小さいほど安定）<br>※グラフのバーは複数回の試行で得られた中央値を表しています。サンプル数不足や追加カメラの描画などで比較条件を満たさない結果は、理由を添えて参考値として表示します。</div>");
+            html.Append("<div class='note'><strong>【データの見方】</strong><br>・<strong>中央値</strong>: 計測期間中の代表的な負荷値（値が小さいほど軽量）<br>・<strong>標準偏差</strong>: アニメーション等による負荷のばらつき（値が小さいほど安定）<br>※グラフのバーは複数回の試行で得られた中央値を表しています。サンプル数不足や時刻取得の異常などで比較条件を満たさない結果は、理由を添えて参考値として表示します。</div>");
             if (!string.IsNullOrEmpty(report.error)) html.Append("<p class='warn'>").Append(H(report.error)).Append("</p>");
             foreach (var group in report.cases.GroupBy(x => new { x.environment, x.view, x.population }))
             {
@@ -49,7 +50,7 @@ p{margin:8px 0}.eyebrow{font-size:12px;letter-spacing:.14em;color:var(--muted)}.
                 html.Append("<div class='grid'>");
                 Comparison(html, cases, baseline, true, gpuNoise, BenchmarkReport.ControlDeviationPercent(baseline, control, true, profile), profile);
                 Comparison(html, cases, baseline, false, cpuNoise, BenchmarkReport.ControlDeviationPercent(baseline, control, false, profile), profile);
-                html.Append("</div><p class='detail-note'>※GPU時間はForward描画およびシャドウマップ生成にかかった処理時間（描画命令待ち含む）です。CPU時間はメインスレッドのPlayerLoop処理時間です。両者は並行動作するため加算はできません。0.000 msには測定限界以下の極小値も含まれます。</p>");
+                html.Append("</div><p class='detail-note'>※GPU時間は追加カメラやRenderTextureへの描画・影生成・CustomRenderTexture更新を含む区間時間（描画命令待ち含む）です。重なる区間は1回だけ数えます。CPU時間はメインスレッドのPlayerLoop処理時間です。両者は並行動作するため加算はできません。0.000 msには測定限界以下の極小値も含まれます。</p>");
                 DrawCounters(html, cases, baseline, profile.rounds);
                 html.Append("<h3>Unity フレーム時間の中央値</h3><p class='detail-note'>※Unity Editor全体のフレーム更新間隔です。内部処理や待機時間を含み、VRChatゲーム内でのFPSとは直接一致しません。</p><table><tr><th>対象</th><th>中央値 (ms)</th><th>有効試行回数</th></tr>");
                 foreach (var row in cases.Where(x => x.role != "control").GroupBy(x => new { x.entryId, x.role }))
@@ -120,7 +121,7 @@ p{margin:8px 0}.eyebrow{font-size:12px;letter-spacing:.14em;color:var(--muted)}.
             double max = rows.Select(x => BenchmarkReport.Aggregate(x, gpu)).Where(BenchmarkStatistics.IsFinite).DefaultIfEmpty(0).Max();
             var warning = BenchmarkStatistics.ControlWarning(deviationPercent);
             string warningClass = warning == BenchmarkControlWarning.High ? "control-high" : warning == BenchmarkControlWarning.Notice ? "control-notice" : "ok";
-            html.Append("<div class='card ").Append(gpu ? "gpu" : "cpu").Append("'><h3>").Append(gpu ? "GPU時間（Forward描画＋影生成）" : "CPU時間（PlayerLoop）").Append("</h3><p class='").Append(warningClass).Append("'>対照試験: ").Append(H(BenchmarkReport.NoiseText(noise, deviationPercent))).Append("</p><table><tr><th>対象</th><th>中央値 (ms)</th><th>標準偏差 (ms)</th></tr>");
+            html.Append("<div class='card ").Append(gpu ? "gpu" : "cpu").Append("'><h3>").Append(gpu ? "GPU時間（描画・影生成・描画先の更新）" : "CPU時間（PlayerLoop）").Append("</h3><p class='").Append(warningClass).Append("'>対照試験: ").Append(H(BenchmarkReport.NoiseText(noise, deviationPercent))).Append("</p><table><tr><th>対象</th><th>中央値 (ms)</th><th>標準偏差 (ms)</th></tr>");
             foreach (var row in rows)
             {
                 double value = BenchmarkReport.Aggregate(row, gpu);
@@ -164,7 +165,7 @@ p{margin:8px 0}.eyebrow{font-size:12px;letter-spacing:.14em;color:var(--muted)}.
                 html.Append("<p class='warn'><strong>参考値の理由</strong><br>")
                     .Append(H(BenchmarkReport.ReferenceDetails(new[] { result }, gpu)).Replace("\n", "<br>"))
                     .Append("</p>");
-            Func<BenchmarkSample, double> value = frame => (frameTime ? frame.frameTimeNs : gpu ? frame.forwardNs + frame.shadowNs : frame.cpuNs) / 1e6;
+            Func<BenchmarkSample, double> value = frame => (frameTime ? frame.frameTimeNs : gpu ? frame.gpuNs : frame.cpuNs) / 1e6;
             double maximum = Math.Max(.001, frames.Max(value) * 1.08), seconds = Math.Max(.001, interval.seconds);
             const int bins = 80;
             var buckets = frames.GroupBy(x => Math.Max(0, Math.Min(bins - 1, (int)((x.realtime - interval.startedRealtime) / seconds * bins)))).OrderBy(x => x.Key).ToArray();

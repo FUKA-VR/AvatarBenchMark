@@ -6,14 +6,16 @@ namespace FUKA.AvatarBenchmark.Editor
     // Keep one row per expected source frame, even when a query never returns.
     public sealed class BenchmarkCaptureLedger
     {
-        public const int DuplicateRenderFlag = 1 << 16;
+        public const int DuplicateFrameFlag = 1 << 16;
         private readonly List<BenchmarkSample> frames;
         private readonly Dictionary<int, int> pending = new Dictionary<int, int>();
-        private int lastCpuFrame = -1;
+        private readonly Dictionary<int, int> sourceFrames = new Dictionary<int, int>();
+        private int completedCpuFrames;
         public int TotalFrames => frames.Count;
         public int CpuValidFrames { get; private set; }
         public int GpuValidFrames { get; private set; }
         public int PendingGpuFrames => pending.Count;
+        public int PendingCpuFrames => frames.Count - completedCpuFrames;
         public double MaximumFrameSeconds { get; private set; }
 
         public BenchmarkCaptureLedger(List<BenchmarkSample> frames)
@@ -27,21 +29,22 @@ namespace FUKA.AvatarBenchmark.Editor
             if (frames.Count >= 300000) throw new InvalidOperationException("1試行あたりの記録フレーム数が上限（30万フレーム）に達しました。異常な高フレームレートまたは計測ループが発生した可能性があります。");
             if (frames.Count > 0 && frame <= frames[frames.Count - 1].observedFrame)
                 throw new InvalidOperationException("Source frames must be recorded once in ascending order.");
+            sourceFrames.Add(frame, frames.Count);
             frames.Add(new BenchmarkSample
             {
                 observedFrame = frame, realtime = now,
-                cpuNs = -1, frameTimeNs = -1, forwardNs = -1, shadowNs = -1, cameraNs = -1,
+                cpuNs = -1, frameTimeNs = -1, gpuNs = -1, shadowNs = -1, cameraNs = -1, textureNs = -1,
                 drawCalls = -1, setPassCalls = -1, triangles = -1
             });
         }
 
         public void CompleteCpu(int frame, double nextFrameTime, long cpuNs, bool valid, long draws, long sets, long triangles)
         {
-            if (frames.Count == 0 || frame == lastCpuFrame) return;
-            int index = frames.Count - 1;
+            if (!sourceFrames.TryGetValue(frame, out int index)) return;
             var row = frames[index];
-            if (row.observedFrame != frame) return;
-            lastCpuFrame = frame;
+            if (row.cpuReturned) return;
+            row.cpuReturned = true;
+            completedCpuFrames++;
             row.cpuNs = cpuNs; row.cpuValid = valid && cpuNs >= 0;
             row.drawCalls = draws; row.setPassCalls = sets; row.triangles = triangles;
             double duration = nextFrameTime - row.realtime;
@@ -61,7 +64,7 @@ namespace FUKA.AvatarBenchmark.Editor
             if (row.gpuTicket != 0)
             {
                 if (row.gpuValid) GpuValidFrames--;
-                row.gpuValid = false; row.gpuFlags |= DuplicateRenderFlag;
+                row.gpuValid = false; row.gpuFlags |= DuplicateFrameFlag;
                 frames[index] = row;
                 return false;
             }
@@ -78,8 +81,9 @@ namespace FUKA.AvatarBenchmark.Editor
             var row = frames[index];
             row.gpuReturned = true; row.gpuSequence = reply.gpuSequence;
             row.gpuDropped = reply.gpuDropped; row.gpuFlags |= reply.gpuFlags;
-            row.forwardNs = reply.forwardNs; row.shadowNs = reply.shadowNs; row.cameraNs = reply.cameraNs;
-            row.forwardBlocks = reply.forwardBlocks; row.shadowBlocks = reply.shadowBlocks; row.cameraBlocks = reply.cameraBlocks;
+            row.gpuNs = reply.gpuNs; row.shadowNs = reply.shadowNs; row.cameraNs = reply.cameraNs;
+            row.textureNs = reply.textureNs; row.textureBlocks = reply.textureBlocks;
+            row.gpuBlocks = reply.gpuBlocks; row.shadowBlocks = reply.shadowBlocks; row.cameraBlocks = reply.cameraBlocks;
             row.gpuValid = reply.gpuValid && row.gpuFlags == 0;
             if (row.gpuValid) GpuValidFrames++;
             frames[index] = row;

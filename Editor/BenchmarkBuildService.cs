@@ -275,8 +275,11 @@ namespace FUKA.AvatarBenchmark.Editor
                          .Where(EditorUtility.IsPersistent).Select(AssetDatabase.GetAssetPath)
                          .Where(p => !string.IsNullOrEmpty(p) && File.Exists(p)).Distinct().OrderBy(p => p))
             {
-                var info = new FileInfo(path);
-                Append(path + info.Length + info.LastWriteTimeUtc.Ticks);
+                // Unity can rewrite identical asset bytes while preparing Cloth/skin data.
+                // A timestamp change alone does not mean the source was modified.
+                using (var file = File.OpenRead(path))
+                using (var fileHash = SHA256.Create())
+                    Append(path + BitConverter.ToString(fileHash.ComputeHash(file)));
                 yield return null;
             }
             foreach (var asset in Dependencies(root).Where(x => x && Mutable(x))
@@ -346,21 +349,25 @@ namespace FUKA.AvatarBenchmark.Editor
                 return BitConverter.ToString(sha.ComputeHash(Encoding.UTF8.GetBytes(value))).Replace("-", "");
         }
 
-        internal static bool Mutable(Object value) => value is Material || value is Mesh || value is Motion ||
+        internal static bool Mutable(Object value) => value is Material || value is Mesh || value is Motion || value is RenderTexture ||
             value is RuntimeAnimatorController || value is AnimatorState || value is AnimatorStateMachine ||
             value is AnimatorTransitionBase || value is AvatarMask || value is Avatar || value is ScriptableObject && !(value is MonoScript) ||
             value is Texture && AssetDatabase.GetAssetPath(value).EndsWith(".asset", StringComparison.OrdinalIgnoreCase);
 
         internal static Object[] Dependencies(Object root)
         {
-            // CollectDependencies omits some unsaved native Animator graph objects.
+            // CollectDependencies can omit unsaved native assets (including build-generated
+            // render targets). Start at components too, and follow serialized references.
             var found = new HashSet<Object>(EditorUtility.CollectDependencies(new[] { root }).Where(x => x));
+            found.Add(root);
+            if (root is GameObject avatar)
+                foreach (var component in avatar.GetComponentsInChildren<Component>(true)) if (component) found.Add(component);
             var queue = new Queue<Object>(found);
             while (queue.Count > 0)
             {
                 var value = queue.Dequeue();
-                if (!(value is RuntimeAnimatorController || value is AnimatorState || value is AnimatorStateMachine ||
-                      value is AnimatorTransitionBase || value is BlendTree)) continue;
+                if (value is Transform || value is Mesh || value is Avatar || value is Texture && !(value is RenderTexture)) continue;
+                if (!(value is Component || Mutable(value))) continue;
                 using var serialized = new SerializedObject(value);
                 var property = serialized.GetIterator();
                 while (property.Next(true))
@@ -382,7 +389,7 @@ namespace FUKA.AvatarBenchmark.Editor
             int index = 0;
             foreach (var asset in dependencies.Where(x => x && Mutable(x)).Distinct())
             {
-                var copy = Object.Instantiate(asset);
+                var copy = CopyMutableAsset(asset);
                 copy.name = asset.name;
                 copy.hideFlags = HideFlags.None;
                 string extension = copy is Material ? ".mat" : copy is AnimationClip ? ".anim" :
@@ -394,14 +401,34 @@ namespace FUKA.AvatarBenchmark.Editor
             foreach (var copy in map.Values) { Remap(copy, map); AssetDatabase.SaveAssetIfDirty(copy); }
         }
 
-        private static void Remap(Object target, Dictionary<Object, Object> map)
+        internal static void Remap(Object target, Dictionary<Object, Object> map)
         {
-            var serialized = new SerializedObject(target);
+            using var serialized = new SerializedObject(target);
             var property = serialized.GetIterator();
             while (property.Next(true))
                 if (property.propertyType == SerializedPropertyType.ObjectReference && property.objectReferenceValue &&
                     map.TryGetValue(property.objectReferenceValue, out var replacement)) property.objectReferenceValue = replacement;
             serialized.ApplyModifiedPropertiesWithoutUndo();
+        }
+
+        internal static Object CopyMutableAsset(Object source)
+        {
+            // Animator graph objects contain strong references that Instantiate cannot copy
+            // reliably. Copy their serialized fields, then remap the graph explicitly.
+            Object copy = source switch
+            {
+                AnimatorController _ => new AnimatorController(),
+                AnimatorOverrideController _ => new AnimatorOverrideController(),
+                AnimatorStateMachine _ => new AnimatorStateMachine(),
+                AnimatorState _ => new AnimatorState(),
+                AnimatorStateTransition _ => new AnimatorStateTransition(),
+                AnimatorTransition _ => new AnimatorTransition(),
+                BlendTree _ => new BlendTree(),
+                _ => null
+            };
+            if (!copy) return Object.Instantiate(source);
+            EditorUtility.CopySerialized(source, copy);
+            return copy;
         }
 
         private static void PersistTransientAssets(GameObject clone, string directory)
